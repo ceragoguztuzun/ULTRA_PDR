@@ -470,6 +470,15 @@ class NELL995(TransductiveDataset):
 
         torch.save((self.collate([train_data, valid_data, test_data])), self.processed_paths[0])
 
+class GPKG_T(TransductiveDataset):
+
+    urls = [
+        "https://raw.githubusercontent.com/guojiapub/BiQUE/master/src_data/conceptnet-100k/train",
+        "https://raw.githubusercontent.com/guojiapub/BiQUE/master/src_data/conceptnet-100k/valid",
+        "https://raw.githubusercontent.com/guojiapub/BiQUE/master/src_data/conceptnet-100k/test",
+    ]
+    name = "gpkg_t"
+    delimiter = "\t"
 
 class ConceptNet100k(TransductiveDataset):
 

@@ -254,6 +254,8 @@ if __name__ == "__main__":
     )
 
     if "checkpoint" in cfg and cfg.checkpoint is not None:
+        print(cfg.checkpoint)
+
         state = torch.load(cfg.checkpoint, map_location="cpu")
         model.load_state_dict(state["model"])
 
