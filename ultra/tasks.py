@@ -2,7 +2,7 @@ from functools import reduce
 from torch_scatter import scatter_add
 from torch_geometric.data import Data
 import torch
-
+import torch.nn.functional as F
 
 def edge_match(edge_index, query_index):
     # O((n + q)logn) time
@@ -130,14 +130,58 @@ def strict_negative_mask(data, batch):
     return t_mask, h_mask
 
 
-def compute_ranking(pred, target, mask=None):
+def compute_ranking_(pred, target, mask=None):
+    print("pred shape:", pred.shape)
+    print("target shape:", target.shape)
+    print("mask shape:", mask.shape)
+
     pos_pred = pred.gather(-1, target.unsqueeze(-1))
     if mask is not None:
+        # Calculate padding needed on the second dimension
+        padding_needed = pred.size(1) - mask.size(1)
+        if padding_needed > 0:
+            # Pad mask to match pred's shape. pad (left, right) for last dimension
+            mask_adjusted = F.pad(mask, (0, padding_needed), "constant", 0)
+        else:
+            mask_adjusted = mask
+
         # filtered ranking
-        ranking = torch.sum((pos_pred <= pred) & mask, dim=-1) + 1
+        ranking = torch.sum((pos_pred <= pred) & mask_adjusted, dim=-1) + 1
     else:
         # unfiltered ranking
         ranking = torch.sum(pos_pred <= pred, dim=-1) + 1
+
+    return ranking
+
+def compute_ranking(pred, target, mask=None):
+    #print("pred shape:", pred.shape)
+    #print("target shape:", target.shape)
+    if mask is not None:
+        #print("mask shape:", mask.shape)
+
+        # Ensure mask matches pred's shape by clipping the mask
+        if mask.size(1) > pred.size(1):
+            mask_adjusted = mask[:, :pred.size(1)]
+        else:
+            mask_adjusted = mask
+    else:
+        mask_adjusted = None
+
+    pos_pred = pred.gather(-1, target.unsqueeze(-1))
+
+    if mask_adjusted is not None:
+        # Calculate padding needed on the second dimension if any (should not be needed after adjustment)
+        padding_needed = pred.size(1) - mask_adjusted.size(1)
+        if padding_needed > 0:
+            # This block should not be necessary after the initial adjustment, but kept for safety
+            mask_adjusted = F.pad(mask_adjusted, (0, padding_needed), "constant", 0)
+        
+        # Filtered ranking
+        ranking = torch.sum((pos_pred <= pred) & mask_adjusted, dim=-1) + 1
+    else:
+        # Unfiltered ranking
+        ranking = torch.sum(pos_pred <= pred, dim=-1) + 1
+
     return ranking
 
 

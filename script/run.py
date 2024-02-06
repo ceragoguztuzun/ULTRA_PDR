@@ -16,7 +16,7 @@ from torch_geometric.data import Data
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 from ultra import tasks, util
 from ultra.models import Ultra
-
+from tqdm import tqdm
 
 separator = ">" * 30
 line = "-" * 30
@@ -116,7 +116,141 @@ def train_and_validate(cfg, model, train_data, valid_data, device, logger, filte
     state = torch.load("model_epoch_%d.pth" % best_epoch, map_location=device)
     model.load_state_dict(state["model"])
     util.synchronize()
+'''
+@torch.no_grad()
+def infer(cfg, model, test_data, device, logger, filtered_data=None, return_metrics=False):
+    # Simplification for single-process context: no need for DistributedSampler or world_size, rank variables.
+    
+    test_triplets = torch.cat([test_data.target_edge_index, test_data.target_edge_type.unsqueeze(0)]).t()
+    test_loader = torch_data.DataLoader(test_triplets, cfg.train.batch_size, shuffle=False)  # Ensure consistent order
 
+    model.eval()
+    rankings = []
+    num_negatives = []
+    triplet_to_rank = {}  # Dictionary to map triplets to their ranks
+
+    for batch in test_loader:
+        t_batch, h_batch = tasks.all_negative(test_data, batch)
+        t_pred = model(test_data, t_batch)
+        h_pred = model(test_data, h_batch)
+
+        print('tpred', t_pred.shape, t_pred)
+        quit()
+'''
+@torch.no_grad()
+def infer(cfg, model, test_data, device, logger, filtered_data=None, return_metrics=False):
+    test_triplets = torch.cat([test_data.target_edge_index, test_data.target_edge_type.unsqueeze(0)]).t()
+    test_loader = torch_data.DataLoader(test_triplets, cfg.train.batch_size, shuffle=False)  # Ensure consistent order
+
+    model.eval()
+    triplet_to_score = {}  # Dictionary to map triplets to their actual tail scores
+
+    triplet_scores = []
+
+    for batch_idx, batch in enumerate(test_loader):
+        t_batch, h_batch = tasks.all_negative(test_data, batch)
+        t_pred = model(test_data, t_batch)
+        # No need to process h_batch for tail scores
+
+        # Assuming batch contains [head, tail, relation] triplets,
+        # and each row in t_pred corresponds to the scores for all possible tails for a given head, relation pair.
+        for i, (head, tail, relation) in enumerate(batch):
+            # Assuming tail is the index in the list of all entities that corresponds to the actual tail entity.
+            # This index should match the column in t_pred that corresponds to this tail entity.
+            actual_tail_score = t_pred[i, tail.item()]  # Convert tail to index if not already
+            
+            # Store the score using the triplet as a key (convert to tuple to make it hashable)
+            triplet_key = (head.item(), relation.item(), tail.item())  # Convert to items if they are tensors
+            triplet_to_score[triplet_key] = actual_tail_score.item()  # Convert to Python scalar
+
+    # At this point, triplet_to_score contains the scores for the actual tails
+    # You can print or process these scores further as needed
+    for triplet, score in triplet_to_score.items():
+        #print(f"Triplet: {triplet}, Score: {score}")
+        triplet_scores.append(score)
+    
+    print('len of triplet_scores:', len(triplet_scores))
+
+    # save ranks of test triplets to new file
+    # Open the original test file and a new file for output
+    with open('/home/cxo147/ULTRA_PDR/data/GPKG/semi_inductive/test.txt', 'r') as test_file, open('/home/cxo147/ULTRA_PDR/data/GPKG/semi_inductive/test_with_ranks.txt', 'w') as output_file:
+        for line, score in zip(test_file, triplet_scores):
+            # Strip newline characters from the original line and append the rank
+            output_line = f"{line.strip()}\t{score}\n"
+            output_file.write(output_line)
+
+    print('SAVED ;)')
+
+'''
+        if filtered_data is None:
+            t_mask, h_mask = tasks.strict_negative_mask(test_data, batch)
+        else:
+            t_mask, h_mask = tasks.strict_negative_mask(filtered_data, batch)
+        pos_h_index, pos_t_index, pos_r_index = batch.t()
+        t_ranking = tasks.compute_ranking(t_pred, pos_t_index, t_mask)
+        h_ranking = tasks.compute_ranking(h_pred, pos_h_index, h_mask)
+        num_t_negative = t_mask.sum(dim=-1)
+        num_h_negative = h_mask.sum(dim=-1)
+
+        # Update rankings and num_negatives as before
+        rankings += [t_ranking, h_ranking]
+        num_negatives += [num_t_negative, num_h_negative]
+
+        # Mapping triplets to ranks for both head and tail predictions
+        for i, triplet in enumerate(batch):
+            triplet_key = tuple(triplet.tolist())  # Convert triplet tensor to a tuple to use as a dictionary key
+            triplet_to_rank[triplet_key] = (t_ranking[i].item(), h_ranking[i].item())  # Store both t_rank and h_rank
+
+    ranking = torch.cat(rankings)
+    num_negative = torch.cat(num_negatives)
+
+    # Proceed with the rest of your code as is, since we're not altering the computation of metrics or the distributed logic
+
+    # Example usage of triplet_to_rank:
+    # Now you can directly access the rank of any triplet by its tuple representation
+    print('len of test_triplets:', len(test_triplets))
+    # For example, to get the rank of the first triplet:
+    #first_triplet_key = tuple(test_triplets[0].tolist())
+    #if first_triplet_key in triplet_to_rank:
+    #    print(f"Rank of the first triplet (head and tail): {triplet_to_rank[first_triplet_key]}")
+    #else:
+    #    print("First triplet not found in ranking.")
+
+    ranks_list = []
+
+    print('len of test_triplets:', len(test_triplets))
+
+    # Iterate through each triplet in test_triplets
+    for triplet in tqdm(test_triplets, mininterval=0.1):
+        # Convert the current triplet to a tuple
+        triplet_key = tuple(triplet.tolist())
+
+        # Check if the triplet's tuple representation is in the mapping
+        if triplet_key in triplet_to_rank:
+            # Append the rank to ranks_list
+            # This example assumes you want to handle head and tail ranks separately;
+            # adjust according to your needs
+            ranks_list.append(triplet_to_rank[triplet_key])
+        else:
+            # Handle the case where the triplet is not found in the mapping
+            # For example, append a default value or a placeholder indicating not found
+            ranks_list.append(('not found', 'not found'))
+
+    print('len of ranks_list:', len(ranks_list))
+
+    # save ranks of test triplets to new file
+    # Open the original test file and a new file for output
+    with open('/home/cxo147/ULTRA_PDR/data/GPKG/semi_inductive/test.txt', 'r') as test_file, open('/home/cxo147/ULTRA_PDR/data/GPKG/semi_inductive/test_with_ranks.txt', 'w') as output_file:
+        for line, rank in zip(test_file, ranks_list):
+            # Strip newline characters from the original line and append the rank
+            output_line = f"{line.strip()}\t{rank}\n"
+            output_file.write(output_line)
+
+    print('SAVED ;)')
+    # Return metrics or MRR as originally intended
+    mrr = (1 / ranking.float()).mean()
+    return mrr if not return_metrics else metrics
+'''
 
 @torch.no_grad()
 def test(cfg, model, test_data, device, logger, filtered_data=None, return_metrics=False):
@@ -127,6 +261,9 @@ def test(cfg, model, test_data, device, logger, filtered_data=None, return_metri
     sampler = torch_data.DistributedSampler(test_triplets, world_size, rank)
     test_loader = torch_data.DataLoader(test_triplets, cfg.train.batch_size, sampler=sampler)
 
+    print('test_triplets', len(test_triplets), type(test_triplets))
+    print('test_loader', len(test_loader), type(test_loader))
+    
     model.eval()
     rankings = []
     num_negatives = []
@@ -222,6 +359,8 @@ def test(cfg, model, test_data, device, logger, filtered_data=None, return_metri
             logger.warning("%s: %g" % (metric, score))
             metrics[metric] = score
     mrr = (1 / all_ranking.float()).mean()
+ 
+    print('all_rankings:', len(all_ranking))
 
     return mrr if not return_metrics else metrics
 
@@ -291,13 +430,18 @@ if __name__ == "__main__":
     
     val_filtered_data = val_filtered_data.to(device)
     test_filtered_data = test_filtered_data.to(device)
+    print(len(test_data), type(test_data))
+    print(test_data)
     
     train_and_validate(cfg, model, train_data, valid_data, filtered_data=val_filtered_data, device=device, batch_per_epoch=cfg.train.batch_per_epoch, logger=logger)
     if util.get_rank() == 0:
         logger.warning(separator)
         logger.warning("Evaluate on valid")
-    test(cfg, model, valid_data, filtered_data=val_filtered_data, device=device, logger=logger)
+    #test(cfg, model, valid_data, filtered_data=val_filtered_data, device=device, logger=logger) uncomment me later!
     if util.get_rank() == 0:
         logger.warning(separator)
         logger.warning("Evaluate on test")
-    test(cfg, model, test_data, filtered_data=test_filtered_data, device=device, logger=logger)
+    #rank_triplets(model, test_data, device)
+    #print(('rank done ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~'))
+    infer(cfg, model, test_data, filtered_data=test_filtered_data, device=device, logger=logger)
+    #test(cfg, model, test_data, filtered_data=test_filtered_data, device=device, logger=logger)

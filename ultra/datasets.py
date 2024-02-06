@@ -4,6 +4,7 @@ import shutil
 import torch
 from torch_geometric.data import Data, InMemoryDataset, download_url, extract_zip
 from torch_geometric.datasets import RelLinkPredDataset, WordNet18RR
+import time
 
 from ultra.tasks import build_relation_graph
 
@@ -470,12 +471,13 @@ class NELL995(TransductiveDataset):
 
         torch.save((self.collate([train_data, valid_data, test_data])), self.processed_paths[0])
 
+''' transductive GPKG '''
 class GPKG_T(TransductiveDataset):
 
     urls = [
-        "https://raw.githubusercontent.com/guojiapub/BiQUE/master/src_data/conceptnet-100k/train",
-        "https://raw.githubusercontent.com/guojiapub/BiQUE/master/src_data/conceptnet-100k/valid",
-        "https://raw.githubusercontent.com/guojiapub/BiQUE/master/src_data/conceptnet-100k/test",
+        "https://raw.githubusercontent.com/ceragoguztuzun/ULTRA_PDR/main/data/GPKG/transductive/train.txt",
+        "https://raw.githubusercontent.com/ceragoguztuzun/ULTRA_PDR/main/data/GPKG/transductive/valid.txt",
+        "https://raw.githubusercontent.com/ceragoguztuzun/ULTRA_PDR/main/data/GPKG/transductive/test.txt",
     ]
     name = "gpkg_t"
     delimiter = "\t"
@@ -617,12 +619,26 @@ class InductiveDataset(InMemoryDataset):
         self.version = str(version)
         super().__init__(root, transform, pre_transform)
         self.data, self.slices = torch.load(self.processed_paths[0])
-
+    '''
     def download(self):
         for url, path in zip(self.urls, self.raw_paths):
-            download_path = download_url(url % self.version, self.raw_dir)
+            # Check if version is na, if so, use the URL without formatting for the version
+            if self.version == 'na':
+                download_path = download_url(url, self.raw_dir)
+            else:
+                download_path = download_url(url % self.version, self.raw_dir)
             os.rename(download_path, path)
-    
+    '''
+    def download(self):
+        for url, path in zip(self.urls, self.raw_paths):
+            # Add a unique query parameter to the URL to bypass cache
+            unique_param = "?nocache=" + str(int(time.time()))
+            if self.version == 'na':
+                download_path = download_url(url + unique_param, self.raw_dir)
+            else:
+                download_path = download_url((url % self.version) + unique_param, self.raw_dir)
+            os.rename(download_path, path)
+
     def load_file(self, triplet_file, inv_entity_vocab={}, inv_rel_vocab={}):
 
         triplets = []
@@ -630,7 +646,15 @@ class InductiveDataset(InMemoryDataset):
 
         with open(triplet_file, "r", encoding="utf-8") as fin:
             for l in fin:
-                u, r, v = l.split() if self.delimiter is None else l.strip().split(self.delimiter)
+                # Split based on the specified delimiter or whitespace
+                parts = l.strip().split() if self.delimiter is None else l.strip().split(self.delimiter)
+                
+                # Handle special case for merging last two parts
+                if len(parts) > 3 and parts[-2].isdigit() == False and parts[-1].isdigit():
+                    parts = parts[:-2] + ["".join(parts[-2:])]
+                
+                # Unpack the parts into variables, assuming we now always have 3 parts
+                u, r, v = parts[:3]
                 if u not in inv_entity_vocab:
                     inv_entity_vocab[u] = entity_cnt
                     entity_cnt += 1
@@ -727,6 +751,30 @@ class InductiveDataset(InMemoryDataset):
     def __repr__(self):
         return "%s(%s)" % (self.name, self.version)
 
+
+''' semi-inductive GPKG '''
+class GPKG_SInd(InductiveDataset): 
+
+    urls = [
+        #"https://raw.githubusercontent.com/ceragoguztuzun/ULTRA_PDR/main/data/GPKG/transductive/train.txt", #"https://raw.githubusercontent.com/ceragoguztuzun/ULTRA_PDR/main/data/GPKG/GP_KG.txt",
+        "https://raw.githubusercontent.com/ceragoguztuzun/ULTRA_PDR/main/data/GPKG/semi_inductive/train.txt", #train
+        "https://raw.githubusercontent.com/ceragoguztuzun/ULTRA_PDR/main/data/GPKG/semi_inductive/inference_g.txt", #inference graph (valid + test)
+        "https://raw.githubusercontent.com/ceragoguztuzun/ULTRA_PDR/main/data/GPKG/semi_inductive/valid.txt", #valid
+        "https://raw.githubusercontent.com/ceragoguztuzun/ULTRA_PDR/main/data/GPKG/semi_inductive/test.txt", #test
+        ]
+    name = "gpkg_si"
+
+''' fully-inductive GPKG '''
+class GPKG_FI(InductiveDataset):
+
+    urls = [
+        #"https://raw.githubusercontent.com/ceragoguztuzun/ULTRA_PDR/main/data/GPKG/GPKG.txt",
+        "https://raw.githubusercontent.com/ceragoguztuzun/ULTRA_PDR/main/data/GPKG/fully_inductive/train.txt",
+        "https://raw.githubusercontent.com/ceragoguztuzun/ULTRA_PDR/main/data/GPKG/fully_inductive/inference_g.txt",
+        "https://raw.githubusercontent.com/ceragoguztuzun/ULTRA_PDR/main/data/GPKG/fully_inductive/valid.txt",
+        "https://raw.githubusercontent.com/ceragoguztuzun/ULTRA_PDR/main/data/GPKG/fully_inductive/test.txt",
+        ]
+    name = "gpkg_fi"
 
 class IngramInductive(InductiveDataset):
 
